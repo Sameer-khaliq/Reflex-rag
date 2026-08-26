@@ -1,0 +1,53 @@
+providers:
+  groq:
+    base_url: https://api.groq.com/openai/v1
+    rate_limits:
+      openai/gpt-oss-20b:
+        rpm: 30
+        rpd: 1000
+        tpm: 8000
+        tpd: 200000
+      openai/gpt-oss-120b:
+        rpm: 30
+        rpd: 1000
+        tpm: 8000
+        tpd: 200000
+      qwen/qwen3.6-27b:
+        rpm: 30
+        rpd: 1000
+        tpm: 8000
+        tpd: 200000
+
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    rate_limits:
+      account:
+        rpm: 20
+        rpd_unfunded: 50
+        rpd_funded: 1000
+
+#
+models:
+  tier1_grading:     
+    primary:
+      provider: groq
+      model: openai/gpt-oss-20b
+    fallback:
+      provider: openrouter
+      model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+
+  tier2_rewriting:      
+    primary:
+      provider: groq
+      model: qwen/qwen3.6-27b
+    fallback:
+      provider: openrouter
+      model: google/gemma-4-26b-a4b-it:free
+
+  tier3_generation:     # answer generation (FR-9/FR-18)
+    primary:
+      provider: groq
+      model: openai/gpt-oss-120b
+    fallback:
+      provider: openrouter
+      model: nvidia/nemotron-3-ultra:free
