@@ -1,0 +1,11 @@
+document_grading:
+  p_correct_threshold: 0.5   # proportion CORRECT needed to proceed to generation
+
+answer_grading:
+  groundedness_threshold: 0.7   
+  relevance_threshold: 0.7      
+
+iteration_caps:
+  
+  max_iterations: 3              # retrieve→grade→rewrite loop
+  max_generation_attempts: 2     # generate→grade→regenerate loop
