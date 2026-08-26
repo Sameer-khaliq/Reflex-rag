@@ -7,7 +7,10 @@ authors = [
     { name = "Sameer-khaliq", email = "sameerkhaliq58@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pydantic-settings>=2.15.0",
+    "pyyaml>=6.0.3",
+]
 
 [project.scripts]
 self-correcting-rag = "self_correcting_rag:main"
@@ -15,3 +18,9 @@ self-correcting-rag = "self_correcting_rag:main"
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.4",
+]
