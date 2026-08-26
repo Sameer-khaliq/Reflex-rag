@@ -1,11 +1,30 @@
-# Python-generated files
+# Python
 __pycache__/
-*.py[oc]
-build/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
 dist/
-wheels/
-*.egg-info
+build/
 
-# Virtual environments
-.venv
+# Env
 .env
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data (corpus/index are populated by ingestion, not tracked)
+data/corpus/*
+!data/corpus/.gitkeep
+data/index/*
+!data/index/.gitkeep
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+node_modules/
