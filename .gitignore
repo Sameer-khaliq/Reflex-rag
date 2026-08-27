@@ -16,8 +16,7 @@ build/
 htmlcov/
 
 # Data (corpus/index are populated by ingestion, not tracked)
-data/corpus/*
-!data/corpus/.gitkeep
+
 data/index/*
 !data/index/.gitkeep
 
