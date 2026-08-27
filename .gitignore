@@ -28,3 +28,4 @@ data/index/*
 Thumbs.db
 
 node_modules/
+data/processed/
