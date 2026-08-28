@@ -51,3 +51,7 @@ models:
     fallback:
       provider: openrouter
       model: nvidia/nemotron-3-ultra:free
+
+resilience:
+  max_retries: 2
+  base_delay_s: 0.5
