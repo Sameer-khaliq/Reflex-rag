@@ -5,7 +5,6 @@ from schemas.answer_grade import AnswerGrade
 from schemas.chunk_grade import ChunkGrade
 from schemas.rewrite import RewriteOutput
 
-
 MALFORMED_CHUNK_GRADE_JSON = '{"chunk_id": "c1", "grade": "MAYBE"}'
 MALFORMED_ANSWER_GRADE_JSON = '{"groundedness_score": "high", "relevance_score": 0.8}'
 MALFORMED_ANSWER_GRADE_OUT_OF_RANGE_JSON = '{"groundedness_score": 1.4, "relevance_score": 0.8}'

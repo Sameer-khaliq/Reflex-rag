@@ -12,7 +12,7 @@ class RetriesExhaustedError(Exception):
     pass
 
 
-async def with_retry(
+async def with_retry[T](
     func: Callable[[], Awaitable[T]],
     max_retries: int | None = None,
     base_delay_s: float | None = None,
