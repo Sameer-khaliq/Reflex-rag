@@ -8,8 +8,13 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "bm25s>=0.3.11",
+    "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
     "pyyaml>=6.0.3",
+    "qdrant-client>=1.19.0",
+    "sentence-transformers>=6.0.0",
+    "torch>=2.13.0",
 ]
 
 [project.scripts]
@@ -24,3 +29,5 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.4",
 ]
+[tool.pytest.ini_options]
+pythonpath = ["src"]
