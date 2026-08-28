@@ -1,0 +1,24 @@
+embedding:
+  provider: gemini
+  model: gemini-embedding-001
+  version: "001"
+  dimension: 768
+
+chunking:
+  min_tokens: 200
+  max_tokens: 500
+  overlap_min_pct: 0.10
+  overlap_max_pct: 0.15
+
+retrieval:
+  sparse_top_n: 20
+  dense_top_n: 20
+  rrf_k: 60
+  bm25_index_dir: data/.bm25_index
+
+rerank:
+  top_k: 10
+  candidate_pool: 10
+  model: cross-encoder/ms-marco-MiniLM-L-6-v2
+  max_candidate_chars: 800
+  timeout_s: 5.4
