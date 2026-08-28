@@ -32,6 +32,12 @@ class Settings(BaseSettings):
 
     tavily_api_key: str
 
+    # Embeddings are the one non-Groq/OpenRouter provider dependency in
+    # the stack, isolated strictly to embedding calls — never used for
+    # any LLM call site (see model_tiers below, which is Groq/OpenRouter
+    # only).
+    google_api_key: str
+
 
 # ---------------------------------------------------------------------------
 # thresholds.yaml
@@ -87,6 +93,53 @@ class ProvidersConfig(BaseModel):
     openrouter: OpenRouterProviderConfig
 
 
+class ResilienceConfig(BaseModel):
+    """Shared retry/backoff policy (NFR-10) — every external call site
+    (LLM providers, Qdrant, Tavily) reads from this one place rather than
+    each hardcoding its own retry count."""
+    max_retries: int
+    base_delay_s: float
+
+
+# ---------------------------------------------------------------------------
+# retrieval.yaml (new — Phase 2)
+# ---------------------------------------------------------------------------
+class EmbeddingConfig(BaseModel):
+    """Pins model/version/dimension in one place (Risk Register #5) so
+    ingestion-time and query-time embedding calls can never silently
+    drift apart."""
+    provider: str   # "gemini" — only one supported right now, kept
+                     # explicit rather than assumed so a future provider
+                     # swap is a visible config change, not a silent one
+    model: str
+    version: str
+    dimension: int
+
+
+class ChunkingConfig(BaseModel):
+    min_tokens: int
+    max_tokens: int
+    overlap_min_pct: float
+    overlap_max_pct: float
+
+
+class RerankConfig(BaseModel):
+    top_k: int
+    candidate_pool: int
+    model: str
+    max_candidate_chars: int
+    timeout_s: float
+
+
+class RetrievalConfig(BaseModel):
+    sparse_top_n: int
+    dense_top_n: int
+    rrf_k: int
+    bm25_index_dir: str
+    chunking: ChunkingConfig
+    rerank: RerankConfig
+
+
 # ---------------------------------------------------------------------------
 # YAML loading — raises loudly on anything missing/malformed
 # ---------------------------------------------------------------------------
@@ -106,6 +159,9 @@ class AppConfig(BaseModel):
     thresholds: ThresholdsConfig
     model_tiers: ModelTierConfig
     providers: ProvidersConfig
+    resilience: ResilienceConfig
+    embedding: EmbeddingConfig
+    retrieval: RetrievalConfig
 
 
 @lru_cache
@@ -150,9 +206,25 @@ def get_config() -> AppConfig:
         ),
     )
 
+    resilience = ResilienceConfig(**raw_limits["resilience"])
+
+    raw_retrieval = _load_yaml("retrieval.yaml")
+    embedding = EmbeddingConfig(**raw_retrieval["embedding"])
+    retrieval = RetrievalConfig(
+        sparse_top_n=raw_retrieval["retrieval"]["sparse_top_n"],
+        dense_top_n=raw_retrieval["retrieval"]["dense_top_n"],
+        rrf_k=raw_retrieval["retrieval"]["rrf_k"],
+        bm25_index_dir=raw_retrieval["retrieval"]["bm25_index_dir"],
+        chunking=ChunkingConfig(**raw_retrieval["chunking"]),
+        rerank=RerankConfig(**raw_retrieval["rerank"]),
+    )
+
     return AppConfig(
         settings=settings,
         thresholds=thresholds,
         model_tiers=model_tiers,
         providers=providers,
+        resilience=resilience,
+        embedding=embedding,
+        retrieval=retrieval,
     )
