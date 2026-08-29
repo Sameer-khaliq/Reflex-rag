@@ -1,5 +1,5 @@
 """
-Token-based chunking (FR-1).
+Token-based chunking.
 
 Splits raw text into chunks of chunk_min_tokens-chunk_max_tokens tokens,
 with chunk_overlap_min_pct-chunk_overlap_max_pct overlap between
