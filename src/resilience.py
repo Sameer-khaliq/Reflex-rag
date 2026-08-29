@@ -11,7 +11,6 @@ T = TypeVar("T")
 class RetriesExhaustedError(Exception):
     pass
 
-
 async def with_retry[T](
     func: Callable[[], Awaitable[T]],
     max_retries: int | None = None,
