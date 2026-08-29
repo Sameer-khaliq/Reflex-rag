@@ -28,3 +28,5 @@ Thumbs.db
 
 node_modules/
 data/processed/
+data/.ingestion_state
+data/.bm25_index
