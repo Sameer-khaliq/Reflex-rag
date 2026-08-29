@@ -3,7 +3,7 @@ Gemini embedding wrapper — pins model/version/task_type/dimension in one place
 Ingestion uses task_type="document"; query path reuses this module with
 task_type="query". Kept on Gemini per project decision — this is the one
 non-Groq/OpenRouter provider dependency in the stack, isolated to embeddings
-only, never used for LLM calls.
+only,
 """
 from __future__ import annotations
 
