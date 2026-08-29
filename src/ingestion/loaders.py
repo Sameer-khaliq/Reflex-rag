@@ -16,10 +16,7 @@ def load_txt(path: str | Path) -> str:
 
 
 def load_markdown(path: str | Path) -> str:
-    # Loaded as raw text on purpose - we chunk the markdown source
-    # as-is (headers, bullets, etc. all included) rather than stripping
-    # formatting, since that formatting carries semantic structure a
-    # retrieval chunk can benefit from.
+    
     return Path(path).read_text(encoding="utf-8")
 
 
