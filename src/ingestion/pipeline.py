@@ -1,5 +1,5 @@
 """
-Metadata tagging & content-hash dedup (FR-1).
+Metadata tagging & content-hash dedup.
 
 process_document() is the single entrypoint that goes from "a file path"
 to "a list of chunk dicts ready to store" - each one already carrying
