@@ -77,8 +77,23 @@ def get_or_build_index(
 
 
 def get_active_index() -> tuple[bm25s.BM25, list[int]]:
+    """
+    Returns the in-memory BM25 index, auto-loading from disk on first
+    use in this process if it hasn't been loaded yet. This matters
+    because build_index (via `python -m retrieval.sparse_retriever`)
+    typically runs in a separate process from the one serving queries —
+    the in-memory _active_index global doesn't cross process boundaries,
+    only the persisted index on disk does.
+    """
+    global _active_index, _active_chunk_ids
     if _active_index is None:
-        raise RuntimeError("BM25 index not initialized — call get_or_build_index() first.")
+        index_dir = _index_dir()
+        if not index_dir.exists():
+            raise RuntimeError(
+                f"BM25 index not initialized and no persisted index found at {index_dir}. "
+                f"Run `python -m retrieval.sparse_retriever` to build it first."
+            )
+        _active_index, _active_chunk_ids = load_index(index_dir)
     return _active_index, _active_chunk_ids
 
 
