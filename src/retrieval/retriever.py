@@ -37,14 +37,24 @@ async def retrieve(
     dense_top_n: int | None = None,
     rerank_top_k: int | None = None,
     trace_id: str = "retrieve",
-) -> list[dict]:
+) -> dict:
     """
     Runs sparse and dense retrieval concurrently, fuses via RRF,
     backfills payloads missing on sparse-only hits, then reranks the
     fused set unconditionally (FR-2 — no fast/deep branch here).
 
-    Returns the final reranked candidate list:
-    [{"chunk_id", "text", "rerank_score", "rrf_score", "payload"}, ...]
+    Returns:
+        {
+            "chunks": [...],   # final ordered candidate list:
+                                # [{"chunk_id", "text", "rerank_score"?,
+                                #   "rrf_score", "payload"}, ...]
+            "reranked": bool,  # False if the reranker timed out and this
+                                # fell back to RRF-fused order (see
+                                # reranker.rerank_async) — downstream
+                                # grading/audit needs to know the
+                                # difference, not just receive a flat
+                                # list either way
+        }
     """
     cfg = get_config()
     sparse_top_n = sparse_top_n or cfg.retrieval.sparse_top_n
@@ -61,6 +71,7 @@ async def retrieve(
     candidates = to_rerank_candidates(sliced)
 
     reranked = await rerank_async(query, candidates, top_k=rerank_top_k, trace_id=trace_id)
+    did_rerank = bool(reranked) and "rerank_score" in reranked[0]
 
     logger.info(
         "retrieve_complete",
@@ -69,6 +80,7 @@ async def retrieve(
         dense_count=len(dense_results),
         fused_count=len(fused),
         reranked_count=len(reranked),
+        reranked=did_rerank,
     )
 
-    return reranked
+    return {"chunks": reranked, "reranked": did_rerank}
