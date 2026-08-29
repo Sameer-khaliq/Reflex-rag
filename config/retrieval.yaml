@@ -21,4 +21,4 @@ rerank:
   candidate_pool: 10
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
   max_candidate_chars: 800
-  timeout_s: 5.4
+  timeout_s: 10.0
