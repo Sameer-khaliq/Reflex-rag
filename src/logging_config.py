@@ -27,3 +27,9 @@ class _BoundLogger:
 
     def debug(self, event: str, **kwargs) -> None:
         self._logger.debug(self._format(event, **kwargs))
+
+    def error(self, event: str, **kwargs) -> None:
+        self._logger.error(self._format(event, **kwargs))
+
+    def exception(self, event: str, **kwargs) -> None:
+        self._logger.error(self._format(event, **kwargs), exc_info=True)
