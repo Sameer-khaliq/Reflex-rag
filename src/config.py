@@ -26,16 +26,9 @@ class Settings(BaseSettings):
 
     qdrant_url: str
     qdrant_collection_name: str
-
     groq_api_key: str
     openrouter_api_key: str
-
     tavily_api_key: str
-
-    # Embeddings are the one non-Groq/OpenRouter provider dependency in
-    # the stack, isolated strictly to embedding calls — never used for
-    # any LLM call site (see model_tiers below, which is Groq/OpenRouter
-    # only).
     google_api_key: str
 
 
