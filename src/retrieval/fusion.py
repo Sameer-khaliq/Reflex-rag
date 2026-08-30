@@ -21,8 +21,7 @@ from qdrant_client_singleton import get_client
 
 def rrf_fuse(sparse_ranked: list[dict], dense_ranked: list[dict], k: int | None = None) -> list[dict]:
     """
-    sparse_ranked, dense_ranked: lists of {"chunk_id": ..., "score": ..., "payload"?: ...},
-    already sorted descending by score (rank = position in list, 0-indexed).
+    Reciprocal Rank Fusion (RRF) of two ranked lists of chunks.
 
     score = sum over lists containing chunk_id of 1 / (k + rank + 1)
     (rank+1 so the top rank contributes 1/(k+1), not 1/k — standard RRF convention)
