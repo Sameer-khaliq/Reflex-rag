@@ -17,7 +17,6 @@ from logging_config import get_logger
 def get_genai_client() -> genai.Client:
     return genai.Client(api_key=get_config().settings.google_api_key)
 
-
 def embed_texts(
     texts: list[str],
     task_type: str,
