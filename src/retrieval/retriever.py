@@ -41,7 +41,7 @@ async def retrieve(
     """
     Runs sparse and dense retrieval concurrently, fuses via RRF,
     backfills payloads missing on sparse-only hits, then reranks the
-    fused set unconditionally (FR-2 — no fast/deep branch here).
+    fused set unconditionally.
 
     Returns:
         {
