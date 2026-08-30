@@ -38,8 +38,6 @@ def chunk_text(
         start_token   - inclusive token-index offset (internal use / tests)
         end_token     - exclusive token-index offset (internal use / tests)
 
-    All bound params default to Settings if not passed, so callers never
-    need to hardcode a value.
     """
     chunking_cfg = get_config().retrieval.chunking
     min_tokens = min_tokens if min_tokens is not None else chunking_cfg.min_tokens
