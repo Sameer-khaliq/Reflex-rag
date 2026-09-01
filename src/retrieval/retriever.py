@@ -53,7 +53,7 @@ async def retrieve(
                                 # reranker.rerank_async) — downstream
                                 # grading/audit needs to know the
                                 # difference, not just receive a flat
-                                # list either way
+                                #
         }
     """
     cfg = get_config()
