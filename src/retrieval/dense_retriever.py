@@ -1,4 +1,4 @@
-"""Dense retrieval query path (FR-1)."""
+"""Dense retrieval query path"""
 from __future__ import annotations
 
 from config import get_config
