@@ -7,7 +7,7 @@ is NOT reused — that function branched on a fast/deep routing decision
 specific to Project 1's model-tiering router. This project's FR-2 is
 unconditional: reranking happens on the fused set before any grading,
 full stop. The fast_path/correction_path split in this project happens
-later, at the routing gate (FR-3), and it skips grading — not reranking.
+later, at the routing gate , and it skips grading — not reranking.
 See retriever.py for the single unconditional call into reranker.py.
 """
 from __future__ import annotations
