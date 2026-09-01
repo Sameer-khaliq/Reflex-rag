@@ -98,7 +98,7 @@ def get_active_index() -> tuple[bm25s.BM25, list[int]]:
 
 
 def query_bm25(query: str, top_n: int | None = None) -> list[dict]:
-    """Returns [{chunk_id, score}, ...] sorted descending by score."""
+    """Returns [{chunk_id, score}, ..] sorted descending by score."""
     top_n = top_n or get_config().retrieval.sparse_top_n
     retriever, chunk_ids = get_active_index()
 
