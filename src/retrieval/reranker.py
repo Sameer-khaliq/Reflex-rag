@@ -1,6 +1,6 @@
 """
 Local cross-encoder reranking (FR-2) — runs entirely on CPU, no API
-call, unambiguously free-tier.
+call.
 
 Simplified from the prior project's version: that one ran a dedicated
 worker thread with a manual queue to keep rerank calls off the asyncio
