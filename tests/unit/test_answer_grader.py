@@ -3,7 +3,7 @@ import json
 import pytest
 
 from grading import answer_grader
-from schemas.answer_grade import GroundednessGrade, RelevanceGrade
+from schemas.answer_grade import AnswerGrade
 
 
 class _StubModelTiers:
@@ -26,48 +26,34 @@ def _stub_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_grade_groundedness_parses_valid_response(monkeypatch):
+async def test_grade_answer_parses_valid_response(monkeypatch):
     async def fake_call(*args, **kwargs):
-        return json.dumps({"score": 0.9, "reasoning": "Fully supported by context."})
+        return json.dumps({"groundedness_score": 0.9, "relevance_score": 0.85})
 
     monkeypatch.setattr(answer_grader, "call_with_failover", fake_call)
 
-    grade = await answer_grader.grade_groundedness(
-        "The refund takes 5 days.", "Refunds take 5 business days."
-    )
-    assert isinstance(grade, GroundednessGrade)
-    assert grade.score == 0.9
+    grade = await answer_grader.grade_answer("answer", "context", "query")
+    assert isinstance(grade, AnswerGrade)
+    assert grade.groundedness_score == 0.9
+    assert grade.relevance_score == 0.85
 
 
 @pytest.mark.asyncio
-async def test_grade_relevance_parses_valid_response(monkeypatch):
+async def test_grade_answer_strips_markdown_fences(monkeypatch):
     async def fake_call(*args, **kwargs):
-        return json.dumps({"score": 0.95, "reasoning": "Directly answers the question."})
+        return '```json\n{"groundedness_score": 0.4, "relevance_score": 0.6}\n```'
 
     monkeypatch.setattr(answer_grader, "call_with_failover", fake_call)
 
-    grade = await answer_grader.grade_relevance(
-        "Refunds take 5 days.", "How long do refunds take?"
-    )
-    assert isinstance(grade, RelevanceGrade)
-    assert grade.score == 0.95
+    grade = await answer_grader.grade_answer("answer", "context", "query")
+    assert grade.groundedness_score == 0.4
+    assert grade.relevance_score == 0.6
 
 
 @pytest.mark.asyncio
-async def test_grade_groundedness_strips_markdown_fences(monkeypatch):
-    async def fake_call(*args, **kwargs):
-        return '```json\n{"score": 0.4, "reasoning": "Partially supported."}\n```'
-
-    monkeypatch.setattr(answer_grader, "call_with_failover", fake_call)
-
-    grade = await answer_grader.grade_groundedness("answer", "context")
-    assert grade.score == 0.4
-
-
-@pytest.mark.asyncio
-async def test_grade_groundedness_fails_closed_on_malformed_output(monkeypatch):
+async def test_grade_answer_fails_closed_on_malformed_output(monkeypatch):
     """Per IMPLEMENTATION_PLAN.md §3: malformed output gets one retry, then
-    fails closed to score 0.0 — never defaults to a passing score."""
+    BOTH scores fail closed to 0.0 — never defaults to a passing score."""
     call_count = 0
 
     async def fake_call(*args, **kwargs):
@@ -77,81 +63,78 @@ async def test_grade_groundedness_fails_closed_on_malformed_output(monkeypatch):
 
     monkeypatch.setattr(answer_grader, "call_with_failover", fake_call)
 
-    grade = await answer_grader.grade_groundedness("answer", "context")
-    assert grade.score == 0.0
+    grade = await answer_grader.grade_answer("answer", "context", "query")
+    assert grade.groundedness_score == 0.0
+    assert grade.relevance_score == 0.0
     assert call_count == 2  # one initial attempt + one stricter reprompt retry
 
 
 @pytest.mark.asyncio
-async def test_grade_relevance_fails_closed_on_malformed_output(monkeypatch):
-    call_count = 0
-
-    async def fake_call(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return "garbage output"
-
-    monkeypatch.setattr(answer_grader, "call_with_failover", fake_call)
-
-    grade = await answer_grader.grade_relevance("answer", "query")
-    assert grade.score == 0.0
-    assert call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_grade_groundedness_recovers_on_retry(monkeypatch):
+async def test_grade_answer_recovers_on_retry(monkeypatch):
     """First response malformed, second (stricter reprompt) response valid —
     proves the retry path actually recovers, not just fails closed."""
-    responses = iter(["not json", json.dumps({"score": 0.85, "reasoning": "ok"})])
+    responses = iter(
+        ["not json", json.dumps({"groundedness_score": 0.8, "relevance_score": 0.75})]
+    )
 
     async def fake_call(*args, **kwargs):
         return next(responses)
 
     monkeypatch.setattr(answer_grader, "call_with_failover", fake_call)
 
-    grade = await answer_grader.grade_groundedness("answer", "context")
-    assert grade.score == 0.85
+    grade = await answer_grader.grade_answer("answer", "context", "query")
+    assert grade.groundedness_score == 0.8
+    assert grade.relevance_score == 0.75
 
 
 @pytest.mark.asyncio
-async def test_score_out_of_schema_range_triggers_fail_closed(monkeypatch):
+async def test_grade_answer_fails_closed_on_out_of_range_score(monkeypatch):
     """A score outside [0.0, 1.0] fails Pydantic validation just like
-    malformed JSON does — same fail-closed path, not a crash."""
+    malformed JSON — same fail-closed path, not a crash."""
     call_count = 0
 
     async def fake_call(*args, **kwargs):
         nonlocal call_count
         call_count += 1
-        return json.dumps({"score": 1.5, "reasoning": "out of range"})
+        return json.dumps({"groundedness_score": 1.5, "relevance_score": 0.9})
 
     monkeypatch.setattr(answer_grader, "call_with_failover", fake_call)
 
-    grade = await answer_grader.grade_groundedness("answer", "context")
-    assert grade.score == 0.0
+    grade = await answer_grader.grade_answer("answer", "context", "query")
+    assert grade.groundedness_score == 0.0
+    assert grade.relevance_score == 0.0
     assert call_count == 2
 
 
-def test_passes_answer_gate_both_above_threshold(monkeypatch):
+def test_classify_outcome_accepts_when_both_pass(monkeypatch):
     monkeypatch.setattr(answer_grader, "get_config", lambda: _StubConfig())
-    g = GroundednessGrade(score=0.8, reasoning="ok")
-    r = RelevanceGrade(score=0.75, reasoning="ok")
-    assert answer_grader.passes_answer_gate(g, r) is True
+    grade = AnswerGrade(groundedness_score=0.8, relevance_score=0.75)
+    assert answer_grader.classify_outcome(grade) == "accept"
 
 
-def test_passes_answer_gate_fails_if_groundedness_below_threshold(monkeypatch):
+def test_classify_outcome_relevance_fail_checked_first(monkeypatch):
+    """Per REQUIREMENTS.md §3.4, relevance is checked before groundedness —
+    even if groundedness also fails, a low-relevance case must classify as
+    relevance_fail, not groundedness_fail."""
     monkeypatch.setattr(answer_grader, "get_config", lambda: _StubConfig())
-    g = GroundednessGrade(score=0.5, reasoning="ungrounded")
-    r = RelevanceGrade(score=0.9, reasoning="on topic")
-    assert answer_grader.passes_answer_gate(g, r) is False
+    grade = AnswerGrade(groundedness_score=0.3, relevance_score=0.2)
+    assert answer_grader.classify_outcome(grade) == "relevance_fail"
 
 
-def test_passes_answer_gate_fails_if_relevance_below_threshold(monkeypatch):
+def test_classify_outcome_groundedness_fail_when_relevance_ok(monkeypatch):
     monkeypatch.setattr(answer_grader, "get_config", lambda: _StubConfig())
-    g = GroundednessGrade(score=0.9, reasoning="grounded")
-    r = RelevanceGrade(score=0.5, reasoning="off topic")
-    assert answer_grader.passes_answer_gate(g, r) is False
+    grade = AnswerGrade(groundedness_score=0.4, relevance_score=0.9)
+    assert answer_grader.classify_outcome(grade) == "groundedness_fail"
+
+
+def test_classify_outcome_relevance_fail_even_with_high_groundedness(monkeypatch):
+    """A fully-grounded but off-topic answer must still route to
+    relevance_fail, not accept — the two gates are independent."""
+    monkeypatch.setattr(answer_grader, "get_config", lambda: _StubConfig())
+    grade = AnswerGrade(groundedness_score=0.95, relevance_score=0.5)
+    assert answer_grader.classify_outcome(grade) == "relevance_fail"
 
 
 def test_score_out_of_range_rejected_by_schema_directly():
     with pytest.raises(Exception):
-        GroundednessGrade(score=1.5, reasoning="invalid")
+        AnswerGrade(groundedness_score=1.5, relevance_score=0.5)
