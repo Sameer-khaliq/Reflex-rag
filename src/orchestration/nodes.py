@@ -19,7 +19,7 @@ from typing import Literal
 from audit.escalation_queue import push_to_escalation_queue
 from config import get_config
 from fallback.fetch_and_gate import fetch_gated_fallback
-from generation.generator import generate_answer
+from generation.generator import GenerationFailed, generate_answer
 from grading.aggregation import Verdict, aggregate, compute_p_correct
 from grading.answer_grader import classify_outcome, grade_answer
 from grading.document_grader import grade_chunks
@@ -50,13 +50,32 @@ async def retrieve_node(state: GraphState) -> dict:
 # ---------------------------------------------------------------------------
 async def fast_generate_node(state: GraphState) -> dict:
     context_chunks = [c.get("text", "") for c in state["retrieved_chunks"]]
-    answer = await generate_answer(
-        query=state["original_query"],
-        context_chunks=context_chunks,
-        strict=False,
-        trace_id="generate_fast",
-    )
+    logger = get_logger(trace_id="generate_fast")
+    try:
+        answer = await generate_answer(
+            query=state["original_query"],
+            context_chunks=context_chunks,
+            strict=False,
+            trace_id="generate_fast",
+        )
+    except GenerationFailed as exc:
+        # Fast path has no correction loop to fall into — if generation
+        # itself fails outright (both providers exhausted), the only
+        # honest outcome is terminal low_confidence, never a crash and
+        # never a fabricated answer.
+        logger.warning(
+            "fast_generate_failed_terminal", stage="orchestration", error=str(exc)
+        )
+        return {
+            "accepted_context": context_chunks,
+            "low_confidence": True,
+            "low_confidence_reason": "generation_call_failed",
+        }
     return {"answer": answer, "accepted_context": context_chunks}
+
+
+def route_after_fast_generate(state: GraphState) -> Literal["done", "terminal"]:
+    return "terminal" if state.get("low_confidence") else "done"
 
 
 # ---------------------------------------------------------------------------
@@ -194,17 +213,36 @@ async def generate_node(state: GraphState) -> dict:
     # regenerations, which would total 3 generate calls at max=2 — that
     # reading conflicts with §4's own numeric commitment, so this
     # implementation follows §4.
+    logger = get_logger(trace_id="generate")
     is_regeneration = state["generation_attempts"] >= 1
-    answer = await generate_answer(
-        query=state["original_query"],
-        context_chunks=state["accepted_context"],
-        strict=is_regeneration,
-        trace_id="generate",
-    )
+    try:
+        answer = await generate_answer(
+            query=state["original_query"],
+            context_chunks=state["accepted_context"],
+            strict=is_regeneration,
+            trace_id="generate",
+        )
+    except GenerationFailed as exc:
+        # Total provider exhaustion during generation — no safe
+        # fabricated answer exists to fall back to, so this routes to
+        # terminal exactly like a rewrite failure does, rather than
+        # crashing the graph.
+        logger.warning(
+            "generate_node_failed_terminal", stage="orchestration", error=str(exc)
+        )
+        return {
+            "generation_attempts": state["generation_attempts"] + 1,
+            "low_confidence": True,
+            "low_confidence_reason": "generation_call_failed",
+        }
     return {
         "answer": answer,
         "generation_attempts": state["generation_attempts"] + 1,
     }
+
+
+def route_after_generate(state: GraphState) -> Literal["grade", "terminal"]:
+    return "terminal" if state.get("low_confidence") else "grade"
 
 
 async def grade_answer_node(state: GraphState) -> dict:
