@@ -26,6 +26,7 @@ than ever handing generation a rewrite this module wasn't confident in.
 from __future__ import annotations
 
 import json
+import re
 
 from config import get_config
 from llm_clients.router import call_with_failover
@@ -52,6 +53,7 @@ _SYSTEM_PROMPT = (
 
 _MALFORMED_REPROMPT_SUFFIX = (
     "\n\nYour previous response did not match the required JSON schema. "
+    "Do NOT include thinking or analysis. "
     "Respond with ONLY valid JSON matching exactly this schema, no "
     'markdown, no code fences: {"rewritten_query": "<the new query>"}'
 )
@@ -78,12 +80,32 @@ def _is_duplicate(candidate: str, rewrite_history: list[str]) -> bool:
     return any(normalized_candidate == r.strip().lower() for r in rewrite_history)
 
 
+def _clean_response(raw: str) -> str:
+    """Removes <think>...</think> tags and markdown code blocks."""
+    # Strip thinking blocks (e.g. Qwen / DeepSeek)
+    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    # Strip markdown fences
+    if text.startswith("```"):
+        lines = [line for line in text.split("\n") if not line.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+    return text
+
+
 def _try_parse(raw_response: str) -> str | None:
     try:
-        payload = json.loads(raw_response)
+        cleaned = _clean_response(raw_response)
+        payload = json.loads(cleaned)
         parsed = RewriteOutput(rewritten_query=payload["rewritten_query"])
         return parsed.rewritten_query
-    except Exception:  # noqa: BLE001 — any parse/validation failure is treated the same
+    except Exception:
+        # Secondary fallback: regex to extract JSON object if surrounding text exists
+        match = re.search(r'\{.*"rewritten_query"\s*:\s*".*?".*\}', raw_response, re.DOTALL)
+        if match:
+            try:
+                payload = json.loads(match.group(0))
+                return str(payload.get("rewritten_query"))
+            except Exception:
+                pass
         return None
 
 
@@ -99,20 +121,20 @@ async def rewrite_query(
 
     for attempt in range(_MAX_ATTEMPTS):
         try:
+            # max_tokens cap added to keep response under Groq's 1000 OTPM ceiling
+            raw_response = await call_with_failover(
+                slug_pair,
+                system_prompt,
+                user_prompt,
+                trace_id=trace_id,
+                max_tokens=250,
+            )
+        except TypeError:
+            # If call_with_failover signature doesn't take kwargs yet, fall back without max_tokens
             raw_response = await call_with_failover(
                 slug_pair, system_prompt, user_prompt, trace_id=trace_id
             )
         except Exception as exc:
-            # Total provider exhaustion (both Groq and OpenRouter failed)
-            # or any other exception escaping the router — treated as a
-            # failed attempt, same as malformed/duplicate output, not as
-            # a crash. Confirmed necessary by a real run: Groq's primary
-            # call failed on an account-tier output-token limit and
-            # OpenRouter's free-tier fallback was simultaneously
-            # congested upstream — total exhaustion is a real production
-            # scenario here, not just a theoretical one. Same failure
-            # class already fixed in grading/document_grader.py's
-            # _call_or_none(); this is the same fix applied here.
             logger.warning(
                 "rewrite_call_failed_retrying",
                 stage="query_rewriting",

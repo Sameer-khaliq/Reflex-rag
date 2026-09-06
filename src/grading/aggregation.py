@@ -2,24 +2,22 @@
 Aggregation of per-chunk grades into a retrieval-level verdict (FR-5).
 
 Pure functions — no I/O, no LLM calls — implementing
-IMPLEMENTATION_PLAN.md §3.2 exactly:
+the corrective retrieval state machine:
 
     let p_correct = proportion of chunks graded CORRECT
 
     if p_correct >= threshold:
         -> drop INCORRECT chunks, keep CORRECT + AMBIGUOUS -> generate
 
-    elif 0 < p_correct < threshold:
-        if iteration_count < max_iterations:
-            -> rewrite_query
-        else:
-            -> fallback_retrieval (last resort before terminal)
+    elif iteration_count < max_iterations:
+        -> rewrite_query (gives rewriting a chance to fix both 0 < p < threshold
+           and p == 0 term collisions before burning the single-shot fallback)
 
-    elif p_correct == 0:
-        if not fallback_used:
-            -> fallback_retrieval directly
-        else:
-            -> terminal: low_confidence
+    elif not fallback_used:
+        -> fallback_retrieval (exhausted rewrites, last resort before terminal)
+
+    else:
+        -> terminal: low_confidence
 """
 from __future__ import annotations
 
@@ -60,11 +58,17 @@ def decide_verdict(
     if p_correct >= p_correct_threshold:
         return Verdict.GENERATE
 
-    if p_correct == 0.0:
-        return Verdict.FALLBACK_DIRECT if not fallback_used else Verdict.TERMINAL_LOW_CONFIDENCE
+    # If we still have budget for query rewriting, always attempt a rewrite first.
+    # This ensures term collisions (p_correct == 0.0) get disambiguated before
+    # immediately falling back to external web search.
+    if iteration_count < max_iterations:
+        return Verdict.REWRITE
 
-    # 0 < p_correct < threshold
-    return Verdict.REWRITE if iteration_count < max_iterations else Verdict.FALLBACK_LAST_RESORT
+    # When rewrite budget is exhausted, fallback is the last resort before terminal
+    if not fallback_used:
+        return Verdict.FALLBACK_LAST_RESORT
+
+    return Verdict.TERMINAL_LOW_CONFIDENCE
 
 
 def filter_accepted_chunks(chunks: list[dict], chunk_grades: list[ChunkGrade]) -> list[dict]:

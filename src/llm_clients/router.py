@@ -14,11 +14,15 @@ from logging_config import get_logger
 from resilience import RetriesExhaustedError, with_retry
 
 
-async def _dispatch(model_ref: ModelRef, system_prompt: str, user_prompt: str) -> str:
+async def _dispatch(
+    model_ref: ModelRef, system_prompt: str, user_prompt: str, **kwargs
+) -> str:
     if model_ref.provider == "groq":
-        return await call_groq(model_ref.model, system_prompt, user_prompt)
+        return await call_groq(model_ref.model, system_prompt, user_prompt, **kwargs)
     if model_ref.provider == "openrouter":
-        return await call_openrouter(model_ref.model, system_prompt, user_prompt)
+        return await call_openrouter(
+            model_ref.model, system_prompt, user_prompt, **kwargs
+        )
     raise ValueError(f"Unknown provider: {model_ref.provider!r}")
 
 
@@ -27,12 +31,13 @@ async def call_with_failover(
     system_prompt: str,
     user_prompt: str,
     trace_id: str = "llm_call",
+    **kwargs,
 ) -> str:
     logger = get_logger(trace_id=trace_id)
 
     try:
         return await with_retry(
-            lambda: _dispatch(slug_pair.primary, system_prompt, user_prompt)
+            lambda: _dispatch(slug_pair.primary, system_prompt, user_prompt, **kwargs)
         )
     except RetriesExhaustedError as exc:
         logger.warning(
@@ -45,5 +50,5 @@ async def call_with_failover(
             error=str(exc),
         )
         return await with_retry(
-            lambda: _dispatch(slug_pair.fallback, system_prompt, user_prompt)
+            lambda: _dispatch(slug_pair.fallback, system_prompt, user_prompt, **kwargs)
         )
