@@ -67,6 +67,19 @@ _MALFORMED_REPROMPT_SUFFIX = (
 )
 
 
+def _extract_chunk_id(chunk: dict, index: int) -> str:
+    """Safely extracts chunk_id from corpus chunks ('chunk_id') or
+    fallback/Tavily chunks ('id', 'url'), falling back to a deterministic index."""
+    val = chunk.get("chunk_id") or chunk.get("id") or chunk.get("url")
+    return str(val) if val is not None else f"fallback_chunk_{index}"
+
+
+def _extract_chunk_text(chunk: dict) -> str:
+    """Safely extracts text content from corpus chunks ('text') or
+    fallback/Tavily chunks ('content', 'snippet')."""
+    return str(chunk.get("text") or chunk.get("content") or chunk.get("snippet") or "")
+
+
 def _build_user_prompt(query: str, chunk_text: str) -> str:
     return f"Query: {query}\n\nChunk text:\n{chunk_text}"
 
@@ -174,8 +187,8 @@ async def grade_chunks(
     chunks: list[dict],
     trace_id: str = "grade_chunks",
 ) -> list[ChunkGrade]:
-    """Grades every chunk concurrently. Each chunk dict must carry
-    'chunk_id' and 'text'.
+    """Grades every chunk concurrently. Accepts both internal corpus chunks
+    ('chunk_id' / 'text') and external fallback chunks ('id' / 'url' / 'content').
 
     return_exceptions=True is deliberate defense-in-depth: grade_chunk()
     already catches its own call failures internally and never raises,
@@ -185,15 +198,23 @@ async def grade_chunks(
     crashing the whole batch and losing every other chunk's valid grade.
     """
     logger = get_logger(trace_id=trace_id)
-    chunk_ids = [str(c["chunk_id"]) for c in chunks]
+
+    normalized_chunks = [
+        (
+            _extract_chunk_id(chunk, idx),
+            _extract_chunk_text(chunk),
+        )
+        for idx, chunk in enumerate(chunks)
+    ]
+
     tasks = [
-        grade_chunk(query, str(c["chunk_id"]), c.get("text", ""), trace_id=trace_id)
-        for c in chunks
+        grade_chunk(query, chunk_id, chunk_text, trace_id=trace_id)
+        for chunk_id, chunk_text in normalized_chunks
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     graded: list[ChunkGrade] = []
-    for chunk_id, result in zip(chunk_ids, results):
+    for (chunk_id, _), result in zip(normalized_chunks, results):
         if isinstance(result, Exception):
             logger.warning(
                 "chunk_grade_unhandled_exception_fail_closed",
