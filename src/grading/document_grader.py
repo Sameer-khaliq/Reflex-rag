@@ -214,7 +214,6 @@ async def grade_chunks(
             return await grade_chunk(query, cid, ctext, trace_id=trace_id)
 
     tasks = [
-        grade_chunk(query, chunk_id, chunk_text, trace_id=trace_id)
         _throttled_grade(chunk_id, chunk_text)
         for chunk_id, chunk_text in normalized_chunks
     ]

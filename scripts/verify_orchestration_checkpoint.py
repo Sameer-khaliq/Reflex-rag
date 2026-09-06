@@ -30,7 +30,11 @@ second run could silently diverge from the traced one.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 import sys
+
+# Ensure src/ is on sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from orchestration.graph import build_graph, build_initial_state
 
@@ -62,8 +66,8 @@ from orchestration.graph import build_graph, build_initial_state
 # ---------------------------------------------------------------------------
 TRAP_CASE_QUERIES = {
     "term_collision_bad_retrieval": (
-        "What are NimbusPay's supported payment methods, and how do they "
-        "compare across different account tiers and merchant categories?"
+        "How do I resolve a dispute about my last invoice, and how does the "
+        "review process work vs a customer chargeback?"
     ),
     "hallucination_trap": (
         "How long does a partial refund specifically take to process, as "
@@ -83,6 +87,8 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     except Exception:
         pass
 
@@ -110,7 +116,6 @@ async def _run_and_trace(label: str, query: str) -> dict:
     current_state = dict(initial_state)
     async for update in graph.astream(initial_state, stream_mode="updates"):
         for node_name, patch in update.items():
-            print(f"  -> node '{node_name}' returned: {patch}")
             print(f"  -> node '{node_name}' returned: {_summarize_patch(patch)}")
             current_state.update(patch)
 
