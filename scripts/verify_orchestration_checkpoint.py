@@ -79,6 +79,26 @@ TRAP_CASE_QUERIES = {
 _PLACEHOLDER_MARKER = "<FILL IN"
 
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+def _summarize_patch(patch: dict) -> dict:
+    summary = {}
+    for k, v in patch.items():
+        if k == "retrieved_chunks" and isinstance(v, list):
+            summary[k] = f"[{len(v)} chunks: {[c.get('chunk_id') or c.get('source_doc_id') for c in v[:3]]}...]"
+        elif k == "accepted_context" and isinstance(v, list):
+            summary[k] = f"[{len(v)} context strings]"
+        else:
+            summary[k] = v
+    return summary
+
+
 async def _run_and_trace(label: str, query: str) -> dict:
     """Runs the graph once, printing each node's patch as it fires, and
     returns the fully-merged final state — reconstructed from the same
@@ -90,7 +110,7 @@ async def _run_and_trace(label: str, query: str) -> dict:
     current_state = dict(initial_state)
     async for update in graph.astream(initial_state, stream_mode="updates"):
         for node_name, patch in update.items():
-            print(f"  -> node '{node_name}' returned: {patch}")
+            print(f"  -> node '{node_name}' returned: {_summarize_patch(patch)}")
             current_state.update(patch)
 
     return current_state

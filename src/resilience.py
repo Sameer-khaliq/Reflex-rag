@@ -11,6 +11,18 @@ T = TypeVar("T")
 class RetriesExhaustedError(Exception):
     pass
 
+import re
+
+def _extract_retry_delay(exc: Exception, default_delay: float) -> float:
+    msg = str(exc)
+    match = re.search(r"(?:try again in|retry[ -]after|retry_after)\s*([0-9.]+)\s*s?", msg, re.IGNORECASE)
+    if match:
+        try:
+            return float(match.group(1)) + random.uniform(0.5, 1.5)
+        except ValueError:
+            pass
+    return default_delay
+
 async def with_retry[T](
     func: Callable[[], Awaitable[T]],
     max_retries: int | None = None,
@@ -31,6 +43,7 @@ async def with_retry[T](
             last_exc = exc
             if attempt == max_retries:
                 break
-            delay = base_delay_s * (2**attempt) + random.uniform(0, base_delay_s)
+            base_delay = base_delay_s * (2**attempt) + random.uniform(0, base_delay_s)
+            delay = _extract_retry_delay(exc, base_delay)
             await asyncio.sleep(delay)
     raise RetriesExhaustedError(str(last_exc)) from last_exc

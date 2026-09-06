@@ -207,8 +207,14 @@ async def grade_chunks(
         for idx, chunk in enumerate(chunks)
     ]
 
+    semaphore = asyncio.Semaphore(2)
+
+    async def _throttled_grade(cid: str, ctext: str) -> ChunkGrade:
+        async with semaphore:
+            return await grade_chunk(query, cid, ctext, trace_id=trace_id)
+
     tasks = [
-        grade_chunk(query, chunk_id, chunk_text, trace_id=trace_id)
+        _throttled_grade(chunk_id, chunk_text)
         for chunk_id, chunk_text in normalized_chunks
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)

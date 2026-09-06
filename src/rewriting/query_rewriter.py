@@ -46,22 +46,19 @@ _SYSTEM_PROMPT = (
     "original query and a list of prior rewrites that also failed, "
     "produce ONE new reformulation that is genuinely different from "
     "every prior rewrite — more specific, using different phrasing or "
-    "disambiguating terms, not a near-paraphrase. Respond with ONLY a "
-    'JSON object matching this exact schema, no other text: '
-    '{"rewritten_query": "<the new query>"}'
+    "disambiguating terms, not a near-paraphrase.\n"
+    "Respond with ONLY a valid JSON object matching this schema, no markdown, no thinking tags:\n"
+    '{"rewritten_query": "your actual rewritten query text here"}'
 )
 
 _MALFORMED_REPROMPT_SUFFIX = (
-    "\n\nYour previous response did not match the required JSON schema. "
-    "Do NOT include thinking or analysis. "
-    "Respond with ONLY valid JSON matching exactly this schema, no "
-    'markdown, no code fences: {"rewritten_query": "<the new query>"}'
+    "\n\nYour previous response was malformed. Respond with ONLY valid JSON containing your actual search query, "
+    'matching: {"rewritten_query": "your rewritten query text here"}'
 )
 
 _DUPLICATE_REPROMPT_SUFFIX = (
-    "\n\nYour previous rewrite exactly repeated an entry already in the "
-    "rewrite history. Produce a reformulation that is meaningfully "
-    "different in wording and approach from every entry already listed."
+    "\n\nYour previous rewrite repeated an entry in the history or used a placeholder. "
+    "Produce a genuine search query with specific terms different from past attempts."
 )
 
 
@@ -77,6 +74,13 @@ def _build_user_prompt(original_query: str, rewrite_history: list[str]) -> str:
 
 def _is_duplicate(candidate: str, rewrite_history: list[str]) -> bool:
     normalized_candidate = candidate.strip().lower()
+    placeholders = {
+        "<the new query>", "the new query", "<the rewritten query>",
+        "<new query>", "<query>", "the rewritten query", "your actual rewritten query text here",
+        "your rewritten query text here", ""
+    }
+    if normalized_candidate in placeholders:
+        return True
     return any(normalized_candidate == r.strip().lower() for r in rewrite_history)
 
 
