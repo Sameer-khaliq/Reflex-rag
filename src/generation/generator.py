@@ -44,6 +44,18 @@ _STRICT_SYSTEM_PROMPT = (
 )
 
 
+class GenerationFailed(Exception):
+    """Raised when call_with_failover exhausts both providers (Groq and
+    OpenRouter) during answer generation. Unlike grading, there is no
+    safe fabricated default answer to fall back to here — the
+    orchestration layer (Phase 7's generate_node) should catch this and
+    route to terminal low_confidence, the same way rewrite_node catches
+    RewriteGenerationFailed, rather than ever letting a raw provider
+    exception crash the graph. Confirmed necessary by a real run where
+    Groq and OpenRouter failed simultaneously during query rewriting —
+    the identical failure mode is possible here."""
+
+
 def _format_context(context_chunks: list[str]) -> str:
     return "\n\n---\n\n".join(context_chunks)
 
@@ -62,6 +74,9 @@ async def generate_answer(
     rather than a LangGraph state dict, so Phase 7's orchestration layer
     owns all state-shape decisions and this stays a pure, independently
     testable function.
+
+    Raises GenerationFailed if both providers are exhausted — never
+    returns a fabricated answer on failure.
     """
     if not context_chunks:
         logger.warning("generation_called_with_empty_context", trace_id=trace_id)
@@ -79,9 +94,21 @@ async def generate_answer(
         num_chunks=len(context_chunks),
     )
 
-    answer = await call_with_failover(
-        slug_pair, system_prompt, user_prompt, trace_id=trace_id
-    )
+    try:
+        answer = await call_with_failover(
+            slug_pair, system_prompt, user_prompt, trace_id=trace_id
+        )
+    except Exception as exc:
+        logger.warning(
+            "generation_call_failed",
+            trace_id=trace_id,
+            strict=strict,
+            error=str(exc),
+        )
+        raise GenerationFailed(
+            f"Failed to generate an answer (trace_id={trace_id!r}) after "
+            f"provider failover was exhausted."
+        ) from exc
 
     logger.info(
         "generation_completed",
