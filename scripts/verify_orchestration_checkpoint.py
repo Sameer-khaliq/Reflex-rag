@@ -110,6 +110,7 @@ async def _run_and_trace(label: str, query: str) -> dict:
     current_state = dict(initial_state)
     async for update in graph.astream(initial_state, stream_mode="updates"):
         for node_name, patch in update.items():
+            print(f"  -> node '{node_name}' returned: {patch}")
             print(f"  -> node '{node_name}' returned: {_summarize_patch(patch)}")
             current_state.update(patch)
 

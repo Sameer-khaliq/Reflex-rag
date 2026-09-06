@@ -43,6 +43,7 @@ async def with_retry[T](
             last_exc = exc
             if attempt == max_retries:
                 break
+            delay = base_delay_s * (2**attempt) + random.uniform(0, base_delay_s)
             base_delay = base_delay_s * (2**attempt) + random.uniform(0, base_delay_s)
             delay = _extract_retry_delay(exc, base_delay)
             await asyncio.sleep(delay)
