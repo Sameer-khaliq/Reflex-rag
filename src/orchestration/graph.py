@@ -62,7 +62,12 @@ def build_graph():
     )
 
     graph.add_edge("retrieve_fast", "generate_fast")
-    graph.add_edge("generate_fast", END)
+
+    graph.add_conditional_edges(
+        "generate_fast",
+        N.route_after_fast_generate,
+        {"done": END, "terminal": "terminal"},
+    )
 
     graph.add_edge("retrieve_correction", "grade_documents")
 
@@ -85,7 +90,11 @@ def build_graph():
 
     graph.add_edge("fallback", "grade_documents")
 
-    graph.add_edge("generate", "grade_answer")
+    graph.add_conditional_edges(
+        "generate",
+        N.route_after_generate,
+        {"grade": "grade_answer", "terminal": "terminal"},
+    )
 
     graph.add_conditional_edges(
         "grade_answer",
