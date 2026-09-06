@@ -59,10 +59,23 @@ def decide_verdict(
     if p_correct >= p_correct_threshold:
         return Verdict.GENERATE
 
+    # If we still have budget for query rewriting, always attempt a rewrite first.
+    # This ensures term collisions (p_correct == 0.0) get disambiguated before
+    # immediately falling back to external web search.
+    if iteration_count < max_iterations:
+        return Verdict.REWRITE
+    # If there are partially correct or ambiguous chunks (term collision),
+    # trigger rewrite while within iteration budget.
+    if p_correct > 0.0 or has_ambiguous:
+        return Verdict.REWRITE if iteration_count < max_iterations else Verdict.FALLBACK_LAST_RESORT
+
+    # When rewrite budget is exhausted, fallback is the last resort before terminal
     if not fallback_used:
         if iteration_count < max_iterations:
             return Verdict.REWRITE
         return Verdict.FALLBACK_LAST_RESORT
+    # Completely incorrect retrieval (zero correct, zero ambiguous)
+    return Verdict.FALLBACK_DIRECT if not fallback_used else Verdict.TERMINAL_LOW_CONFIDENCE
 
     return Verdict.TERMINAL_LOW_CONFIDENCE
 
@@ -75,6 +88,7 @@ def filter_accepted_chunks(chunks: list[dict], chunk_grades: list[ChunkGrade]) -
     set.
     """
     incorrect_ids = {g.chunk_id for g in chunk_grades if g.grade == "INCORRECT"}
+    return [c for c in chunks if str(c.get("chunk_id")) not in incorrect_ids]
     accepted = []
     for idx, c in enumerate(chunks):
         cid = c.get("chunk_id") or c.get("id") or c.get("url")
@@ -106,6 +120,12 @@ def aggregate(
     p_correct = compute_p_correct(chunk_grades)
     has_ambiguous = any(g.grade == "AMBIGUOUS" for g in chunk_grades)
     verdict = decide_verdict(
+        p_correct, iteration_count, max_iterations, fallback_used, p_correct_threshold
+        p_correct,
+        iteration_count,
+        max_iterations,
+        fallback_used,
+        p_correct_threshold,
         p_correct=p_correct,
         iteration_count=iteration_count,
         max_iterations=max_iterations,
