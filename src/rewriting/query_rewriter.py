@@ -98,9 +98,29 @@ async def rewrite_query(
     system_prompt = _SYSTEM_PROMPT
 
     for attempt in range(_MAX_ATTEMPTS):
-        raw_response = await call_with_failover(
-            slug_pair, system_prompt, user_prompt, trace_id=trace_id
-        )
+        try:
+            raw_response = await call_with_failover(
+                slug_pair, system_prompt, user_prompt, trace_id=trace_id
+            )
+        except Exception as exc:
+            # Total provider exhaustion (both Groq and OpenRouter failed)
+            # or any other exception escaping the router — treated as a
+            # failed attempt, same as malformed/duplicate output, not as
+            # a crash. Confirmed necessary by a real run: Groq's primary
+            # call failed on an account-tier output-token limit and
+            # OpenRouter's free-tier fallback was simultaneously
+            # congested upstream — total exhaustion is a real production
+            # scenario here, not just a theoretical one. Same failure
+            # class already fixed in grading/document_grader.py's
+            # _call_or_none(); this is the same fix applied here.
+            logger.warning(
+                "rewrite_call_failed_retrying",
+                stage="query_rewriting",
+                attempt=attempt,
+                error=str(exc),
+            )
+            continue
+
         candidate = _try_parse(raw_response)
 
         if candidate is None:

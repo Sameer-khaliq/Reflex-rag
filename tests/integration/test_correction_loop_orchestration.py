@@ -497,3 +497,135 @@ async def test_rewrite_generation_failed_short_circuits_to_terminal(monkeypatch)
         "reason": final_state["low_confidence_reason"],
         "iteration_count": final_state["iteration_count"],
     })
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the two real-run bugs found in production logs:
+# (1) query_rewriter.py crashed the whole graph on total provider
+#     exhaustion instead of raising RewriteGenerationFailed.
+# (2) generator.py had the identical unprotected-call gap.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_rewrite_provider_exhaustion_terminates_gracefully(monkeypatch):
+    """Reproduces the exact real-run crash: rewrite_query()'s underlying
+    call_with_failover raises RetriesExhaustedError (both Groq and
+    OpenRouter exhausted). Must terminate gracefully, not crash the
+    graph."""
+
+    class RetriesExhaustedError(Exception):
+        pass
+
+    async def fake_retrieve(query, trace_id=None):
+        return {"chunks": _make_chunks(3), "reranked": True}
+
+    async def fake_grade_chunks(query, chunks, trace_id=None):
+        return [
+            ChunkGrade(chunk_id="c0", grade="CORRECT"),
+            ChunkGrade(chunk_id="c1", grade="INCORRECT"),
+            ChunkGrade(chunk_id="c2", grade="INCORRECT"),
+        ]
+
+    async def fake_rewrite_query_always_exhausted(original_query, rewrite_history, trace_id=None):
+        # Simulates query_rewriter.py's real internal behavior after the
+        # fix: total provider exhaustion converts to RewriteGenerationFailed
+        # after exhausting its own internal retry attempts, rather than
+        # ever letting RetriesExhaustedError itself escape.
+        from rewriting.query_rewriter import RewriteGenerationFailed
+
+        raise RewriteGenerationFailed(
+            "Failed to produce a valid, non-duplicate rewrite after 3 attempts "
+            "(all attempts hit total provider exhaustion)."
+        )
+
+    monkeypatch.setattr(N, "retrieve", fake_retrieve)
+    monkeypatch.setattr(N, "grade_chunks", fake_grade_chunks)
+    monkeypatch.setattr(N, "rewrite_query", fake_rewrite_query_always_exhausted)
+
+    graph = build_graph()
+    initial_state = build_initial_state(
+        "compare X vs Y across every conceivable dimension in full detail"
+    )
+
+    # Must NOT raise — must terminate gracefully
+    final_state = await graph.ainvoke(initial_state)
+
+    assert final_state["low_confidence"] is True
+    assert final_state["low_confidence_reason"] == "rewrite_generation_failed"
+    print("REWRITE PROVIDER EXHAUSTION -> GRACEFUL TERMINATION PASS:", {
+        "reason": final_state["low_confidence_reason"],
+    })
+
+
+@pytest.mark.asyncio
+async def test_generation_failure_during_correction_path_terminates_gracefully(monkeypatch):
+    """generate_node's call_with_failover exhausts both providers mid
+    correction-path. Must terminate gracefully via GenerationFailed, not
+    crash, and must not proceed to grade_answer_node with no answer."""
+    from generation.generator import GenerationFailed
+
+    grade_answer_called = {"n": 0}
+
+    async def fake_retrieve(query, trace_id=None):
+        return {"chunks": _make_chunks(3), "reranked": True}
+
+    async def fake_grade_chunks(query, chunks, trace_id=None):
+        return [ChunkGrade(chunk_id=c["chunk_id"], grade="CORRECT") for c in chunks]
+
+    async def fake_generate_answer_always_fails(query, context_chunks, strict=False, trace_id=None):
+        raise GenerationFailed(f"provider failover exhausted (trace_id={trace_id!r})")
+
+    async def fake_grade_answer(*a, **k):
+        grade_answer_called["n"] += 1
+        from schemas.answer_grade import AnswerGrade
+        return AnswerGrade(groundedness_score=0.9, relevance_score=0.9)
+
+    monkeypatch.setattr(N, "retrieve", fake_retrieve)
+    monkeypatch.setattr(N, "grade_chunks", fake_grade_chunks)
+    monkeypatch.setattr(N, "generate_answer", fake_generate_answer_always_fails)
+    monkeypatch.setattr(N, "grade_answer", fake_grade_answer)
+
+    graph = build_graph()
+    initial_state = build_initial_state(
+        "compare X vs Y across every conceivable dimension in full detail"
+    )
+
+    final_state = await graph.ainvoke(initial_state)
+
+    assert grade_answer_called["n"] == 0, (
+        "grade_answer must never run on a None/missing answer after "
+        "generation failed"
+    )
+    assert final_state["low_confidence"] is True
+    assert final_state["low_confidence_reason"] == "generation_call_failed"
+    print("GENERATION FAILURE (correction_path) -> GRACEFUL TERMINATION PASS:", {
+        "reason": final_state["low_confidence_reason"],
+        "grade_answer_called": grade_answer_called["n"],
+    })
+
+
+@pytest.mark.asyncio
+async def test_generation_failure_during_fast_path_terminates_gracefully(monkeypatch):
+    """Same failure, but on the fast_path (no correction loop to fall
+    into at all) — must still terminate gracefully, not crash."""
+    from generation.generator import GenerationFailed
+
+    async def fake_retrieve(query, trace_id=None):
+        return {"chunks": _make_chunks(2), "reranked": True}
+
+    async def fake_generate_answer_always_fails(query, context_chunks, strict=False, trace_id=None):
+        raise GenerationFailed(f"provider failover exhausted (trace_id={trace_id!r})")
+
+    monkeypatch.setattr(N, "retrieve", fake_retrieve)
+    monkeypatch.setattr(N, "generate_answer", fake_generate_answer_always_fails)
+
+    graph = build_graph()
+    initial_state = build_initial_state("refund policy")  # short -> fast_path
+
+    final_state = await graph.ainvoke(initial_state)
+
+    assert final_state["low_confidence"] is True
+    assert final_state["low_confidence_reason"] == "generation_call_failed"
+    print("GENERATION FAILURE (fast_path) -> GRACEFUL TERMINATION PASS:", {
+        "reason": final_state["low_confidence_reason"],
+    })
