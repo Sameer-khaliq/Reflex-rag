@@ -53,8 +53,6 @@ def process_document(
     path: str | Path,
     min_tokens: int | None = None,
     max_tokens: int | None = None,
-    overlap_min_pct: float | None = None,
-    overlap_max_pct: float | None = None,
     hash_store_path: Path | None = None,
 ) -> list[dict]:
     """
@@ -77,8 +75,6 @@ def process_document(
         text,
         min_tokens=min_tokens,
         max_tokens=max_tokens,
-        overlap_min_pct=overlap_min_pct,
-        overlap_max_pct=overlap_max_pct,
     )
 
     source_doc_id = Path(path).stem
@@ -117,6 +113,9 @@ def ensure_collection(client, collection_name: str, dimension: int):
 
 
 def embed_and_upsert(deduped_chunks: list[dict], trace_id: str = "ingest") -> int:
+    if not deduped_chunks:
+        return 0
+
     cfg = get_config()
     client = get_client()
     ensure_collection(client, cfg.settings.qdrant_collection_name, cfg.embedding.dimension)
