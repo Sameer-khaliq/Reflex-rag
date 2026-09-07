@@ -120,7 +120,7 @@ def aggregate(
     p_correct = compute_p_correct(chunk_grades)
     has_ambiguous = any(g.grade == "AMBIGUOUS" for g in chunk_grades)
     verdict = decide_verdict(
-        p_correct, iteration_count, max_iterations, fallback_used, p_correct_threshold
+        p_correct, iteration_count, max_iterations, fallback_used, p_correct_threshold,
         p_correct,
         iteration_count,
         max_iterations,
