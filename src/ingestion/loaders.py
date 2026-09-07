@@ -48,3 +48,31 @@ def load_document(path: str | Path) -> str:
             f"Supported: {sorted(_LOADERS.keys())}"
         )
     return _LOADERS[ext](path)
+
+if __name__ == "__main__":
+    from pathlib import Path
+
+    corpus_dir = Path("data/corpus")
+
+    # 1. Check folder exists
+    if not corpus_dir.exists():
+        print(f"Directory not found: {corpus_dir.resolve()}")
+    else:
+        # 2. Find all .md files
+        md_files = list(corpus_dir.glob("*.md"))
+        print(f"Found {len(md_files)} Markdown files in {corpus_dir}\n")
+
+        if md_files:
+            # 3. Load the first file as a test
+            test_file = md_files[0]
+            print(f"--- Loading: {test_file.name} ---")
+            raw_content = load_document(test_file)
+            
+            print(f"File Size: {len(raw_content)} characters")
+            print("Preview (First 200 chars):")
+            print("-" * 40)
+            print(raw_content[:200])
+            print("-" * 40)
+            print("\nSuccessfully loaded using load_document()!")
+        else:
+            print("No .md files found in data/corpus/")
