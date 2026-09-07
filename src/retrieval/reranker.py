@@ -1,13 +1,5 @@
 """
-Local cross-encoder reranking (FR-2) — runs entirely on CPU, no API
-call.
-
-Simplified from the prior project's version: that one ran a dedicated
-worker thread with a manual queue to keep rerank calls off the asyncio
-event loop. asyncio.to_thread() does the same job in three lines and is
-the standard-library way to do it — the manual thread+queue pool bought
-nothing extra at this project's scale and was cut, not because it was
-wrong, just unneeded complexity here.
+Local cross-encoder reranking (FR-2) — runs entirely on CPU, no API call.
 """
 from __future__ import annotations
 
@@ -32,17 +24,18 @@ def _get_reranker() -> CrossEncoder:
     torch.set_num_threads(min(4, torch.get_num_threads()))
     model_name = get_config().retrieval.rerank.model
 
+    # Updated max_length to 512 tokens to prevent context boundary cutoff
     try:
         _reranker = CrossEncoder(
             model_name,
-            max_length=256,
+            max_length=512,
             device="cpu",
             local_files_only=True,
         )
     except (OSError, RuntimeError):
         _reranker = CrossEncoder(
             model_name,
-            max_length=256,
+            max_length=512,
             device="cpu",
             local_files_only=False,
         )
