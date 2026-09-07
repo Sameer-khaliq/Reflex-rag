@@ -1,15 +1,6 @@
 """
 Single entrypoint tying dense + sparse + RRF fusion + rerank together
-(FR-1, FR-2). This replaces the prior project's retrieve_and_route_concurrent(),
-which gathered retrieval alongside a routing decision (layer0_rules.route_query()).
-That coupling doesn't apply here: this project's routing gate (FR-3) is a
-separate, pre-retrieval decision that only affects whether grading runs
-afterward — it never affects retrieval or reranking itself. Reranking is
-unconditional here, per FR-2.
-
-The concurrent dense+sparse pattern (asyncio.gather, both legs scheduled
-in the same event-loop tick) is kept from the prior project's
-retrieve_concurrent() — that part was correct and worth reusing as-is.
+(FR-1, FR-2).
 """
 from __future__ import annotations
 
@@ -38,38 +29,27 @@ async def retrieve(
     rerank_top_k: int | None = None,
     trace_id: str = "retrieve",
 ) -> dict:
-    """
-    Runs sparse and dense retrieval concurrently, fuses via RRF,
-    backfills payloads missing on sparse-only hits, then reranks the
-    fused set unconditionally.
-
-    Returns:
-        {
-            "chunks": [...],   # final ordered candidate list:
-                                # [{"chunk_id", "text", "rerank_score"?,
-                                #   "rrf_score", "payload"}, ...]
-            "reranked": bool,  # False if the reranker timed out and this
-                                # fell back to RRF-fused order (see
-                                # reranker.rerank_async) — downstream
-                                # grading/audit needs to know the
-                                # difference, not just receive a flat
-                                #
-        }
-    """
     cfg = get_config()
     sparse_top_n = sparse_top_n or cfg.retrieval.sparse_top_n
     dense_top_n = dense_top_n or cfg.retrieval.dense_top_n
     rerank_top_k = rerank_top_k or cfg.retrieval.rerank.top_k
+    candidate_pool = cfg.retrieval.rerank.candidate_pool
     logger = get_logger(trace_id=trace_id)
 
+    # 1. Fetch sparse and dense in parallel
     sparse_task = _sparse_leg(query, sparse_top_n)
     dense_task = _dense_leg(query, dense_top_n, trace_id)
     sparse_results, dense_results = await asyncio.gather(sparse_task, dense_task)
 
+    # 2. RRF Fusion
     fused = rrf_fuse(sparse_results, dense_results)
-    sliced = _backfill_missing_payloads(fused[:rerank_top_k], trace_id=trace_id)
+
+    # 3. Slice to candidate_pool (NOT rerank_top_k) and backfill payloads
+    pool_slice = fused[:candidate_pool]
+    sliced = _backfill_missing_payloads(pool_slice, trace_id=trace_id)
     candidates = to_rerank_candidates(sliced)
 
+    # 4. Cross-Encoder reranks the pool down to rerank_top_k
     reranked = await rerank_async(query, candidates, top_k=rerank_top_k, trace_id=trace_id)
     did_rerank = bool(reranked) and "rerank_score" in reranked[0]
 
