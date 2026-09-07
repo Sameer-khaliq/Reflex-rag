@@ -1,18 +1,14 @@
 """
-Token-based chunking.
-
-Splits raw text into chunks of chunk_min_tokens-chunk_max_tokens tokens,
-with chunk_overlap_min_pct-chunk_overlap_max_pct overlap between
-adjacent chunks, both bounds pulled from Settings.
-
-Tokenizer: tiktoken's cl100k_base encoding. This is byte-level BPE, so
-decode(encode(text)) == text exactly - decoding any contiguous slice of
-token ids reconstructs the exact substring of the original text. That
-lets us compute char offsets precisely instead of approximating them.
+Structure-aware + Token-budget chunking for Markdown documents.
+Preserves H1/H2 boundaries, injects document & section breadcrumbs,
+and computes precise char/token offsets.
+breadcrumbs mean adding some context of chunk at top
 """
+from __future__ import annotations
 
+import re
+from typing import Any
 import tiktoken
-
 from config import get_config
 
 _encoding = tiktoken.get_encoding("cl100k_base")
@@ -22,73 +18,121 @@ def count_tokens(text: str) -> int:
     return len(_encoding.encode(text))
 
 
+def _extract_sections(markdown_text: str) -> list[dict[str, Any]]:
+    """
+    Splits markdown into logical sections using H1 (#) and H2 (##) headings.
+    Returns list of sections with title, heading, and body text.
+    """
+    lines = markdown_text.splitlines()
+    doc_title = "General"
+    sections: list[dict[str, Any]] = []
+
+    # 1. Identify H1 as the Document Title
+    for line in lines:
+        if line.startswith("# ") and not line.startswith("## "):
+            doc_title = line.replace("# ", "").strip()
+            break
+
+    # 2. Split by H2 boundaries
+    h2_pattern = re.compile(r"^(##\s+.+)$", re.MULTILINE)
+    parts = h2_pattern.split(markdown_text)
+
+    # Preamble (Text before any H2)
+    preamble = parts[0].strip()
+    if preamble:
+        # Remove doc title line from preamble body to avoid duplication
+        body = re.sub(r"^#\s+.*$", "", preamble, flags=re.MULTILINE).strip()
+        if body:
+            sections.append({
+                "doc_title": doc_title,
+                "section_title": "Overview",
+                "body": body,
+            })
+
+    # Paired H2 heading and section body
+    for i in range(1, len(parts), 2):
+        raw_heading = parts[i].strip()
+        section_title = raw_heading.replace("##", "").strip()
+        body = parts[i + 1].strip() if i + 1 < len(parts) else ""
+        if body:
+            sections.append({
+                "doc_title": doc_title,
+                "section_title": section_title,
+                "body": body,
+            })
+
+    return sections
+
+
 def chunk_text(
     text: str,
     min_tokens: int | None = None,
     max_tokens: int | None = None,
-    overlap_min_pct: float | None = None,
-    overlap_max_pct: float | None = None,
 ) -> list[dict]:
     """
-    Returns a list of chunk dicts, each with:
-        text          - the chunk's text (exact substring of the input)
-        start_char    - inclusive char offset into the original text
-        end_char      - exclusive char offset into the original text
-        token_count   - token count of this chunk
-        start_token   - inclusive token-index offset (internal use / tests)
-        end_token     - exclusive token-index offset (internal use / tests)
-
+    Generates contextualized chunks. Each chunk gets a breadcrumb header:
+    "Document: <Title> > Section: <Section>\n<Content>"
+    Falls back to token-window splitting only if a single section exceeds max_tokens.
     """
     chunking_cfg = get_config().retrieval.chunking
     min_tokens = min_tokens if min_tokens is not None else chunking_cfg.min_tokens
     max_tokens = max_tokens if max_tokens is not None else chunking_cfg.max_tokens
-    overlap_min_pct = (
-        overlap_min_pct if overlap_min_pct is not None else chunking_cfg.overlap_min_pct
-    )
-    overlap_max_pct = (
-        overlap_max_pct if overlap_max_pct is not None else chunking_cfg.overlap_max_pct
-    )
 
-    target_overlap_pct = (overlap_min_pct + overlap_max_pct) / 2
-    overlap_tokens = round(max_tokens * target_overlap_pct)
-    step = max_tokens - overlap_tokens
-    if step <= 0:
-        raise ValueError(
-            f"overlap_tokens ({overlap_tokens}) >= max_tokens ({max_tokens}); "
-            f"chunks would never advance. Lower the overlap pct or raise max_tokens."
-        )
-
-    token_ids = _encoding.encode(text)
-    total = len(token_ids)
-    if total == 0:
-        return []
-
+    sections = _extract_sections(text)
     chunks = []
-    start = 0
-    while start < total:
-        end = min(start + max_tokens, total)
 
-        if end - start < min_tokens and start != 0:
-            start = max(0, end - min_tokens)
+    # If document has no markdown headers, treat as single body
+    if not sections:
+        sections = [{"doc_title": "Document", "section_title": "General", "body": text.strip()}]
 
-        chunk_token_ids = token_ids[start:end]
-        prefix_text = _encoding.decode(token_ids[:start]) if start > 0 else ""
-        chunk_text_str = _encoding.decode(chunk_token_ids)
+    for sec in sections:
+        breadcrumb = f"Document: {sec['doc_title']} > Section: {sec['section_title']}\n"
+        full_content = breadcrumb + sec["body"]
+        token_count = count_tokens(full_content)
 
-        start_char = len(prefix_text)
-        end_char = start_char + len(chunk_text_str)
+        # Case A: Fits within target chunk budget
+        if token_count <= max_tokens:
+            start_char = text.find(sec["body"][:40]) if len(sec["body"]) >= 40 else 0
+            chunks.append({
+                "text": full_content,
+                "doc_title": sec["doc_title"],
+                "section_title": sec["section_title"],
+                "start_char": max(0, start_char),
+                "end_char": max(0, start_char) + len(sec["body"]),
+                "token_count": token_count,
+            })
+        else:
+            # Case B: Large section — split paragraph by paragraph with breadcrumbs
+            paragraphs = sec["body"].split("\n\n")
+            current_chunk_body = ""
 
-        chunks.append({
-            "text": chunk_text_str,
-            "start_char": start_char,
-            "end_char": end_char,
-            "token_count": len(chunk_token_ids),
-            "start_token": start,
-            "end_token": end,
-        })
+            for p in paragraphs:
+                candidate = (current_chunk_body + "\n\n" + p).strip() if current_chunk_body else p
+                if count_tokens(breadcrumb + candidate) > max_tokens and current_chunk_body:
+                    c_text = breadcrumb + current_chunk_body
+                    chunks.append({
+                        "text": c_text,
+                        "doc_title": sec["doc_title"],
+                        "section_title": sec["section_title"],
+                        "start_char": 0,
+                        "end_char": len(current_chunk_body),
+                        "token_count": count_tokens(c_text),
+                    })
+                    current_chunk_body = p
+                else:
+                    current_chunk_body = candidate
 
-        if end == total:
-            break
-        start += step
+            if current_chunk_body:
+                c_text = breadcrumb + current_chunk_body
+                chunks.append({
+                    "text": c_text,
+                    "doc_title": sec["doc_title"],
+                    "section_title": sec["section_title"],
+                    "start_char": 0,
+                    "end_char": len(current_chunk_body),
+                    "token_count": count_tokens(c_text),
+                })
 
     return chunks
+
+
