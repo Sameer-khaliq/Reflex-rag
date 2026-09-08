@@ -117,12 +117,18 @@ def to_rerank_candidates(fused_slice: list[dict]) -> list[dict[str, Any]]:
     """Adapt rrf_fuse()'s {"chunk_id", "rrf_score", "payload"} shape into
     what retrieval.reranker expects: dicts carrying a "text" key, with
     everything else passed through untouched."""
-    return [
-        {
-            "chunk_id": item["chunk_id"],
-            "text": _payload_text(item.get("payload"), chunk_id=item["chunk_id"]),
-            "rrf_score": item["rrf_score"],
-            "payload": item.get("payload"),
-        }
-        for item in fused_slice
-    ]
+    candidates = []
+    for item in fused_slice:
+        payload = item.get("payload")
+        text = _payload_text(payload, chunk_id=item["chunk_id"])
+        if payload is None:
+            payload = {"text": text}
+        candidates.append(
+            {
+                "chunk_id": item["chunk_id"],
+                "text": text,
+                "rrf_score": item["rrf_score"],
+                "payload": payload,
+            }
+        )
+    return candidates
