@@ -89,11 +89,6 @@ def query_bm25(query: str, top_n: int | None = None, trace_id: str = "bm25_query
     query_tokens = bm25s.tokenize([query], stopwords="en", return_ids=False, show_progress=False)
 
     if not query_tokens or not query_tokens[0]:
-        # Query reduced to nothing after stopword removal (e.g. "is the and of").
-        # bm25s.retrieve() does NOT raise here - it silently returns an
-        # all-zero-score, arbitrary-order top-k that looks like a genuine
-        # BM25 hit list downstream. Short-circuit instead of letting that
-        # noise enter RRF fusion as if it were a real sparse signal.
         logger = get_logger(trace_id=trace_id)
         logger.warning("bm25_empty_query_tokens", stage="bm25_query", query=query)
         return []
