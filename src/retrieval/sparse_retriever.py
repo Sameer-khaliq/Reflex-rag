@@ -82,11 +82,22 @@ def get_active_index() -> tuple[bm25s.BM25, list[Any]]:
     return _active_index, _active_chunk_ids
 
 
-def query_bm25(query: str, top_n: int | None = None) -> list[dict]:
+def query_bm25(query: str, top_n: int | None = None, trace_id: str = "bm25_query") -> list[dict]:
     top_n = top_n or get_config().retrieval.sparse_top_n
     retriever, chunk_ids = get_active_index()
 
     query_tokens = bm25s.tokenize([query], stopwords="en", return_ids=False, show_progress=False)
+
+    if not query_tokens or not query_tokens[0]:
+        # Query reduced to nothing after stopword removal (e.g. "is the and of").
+        # bm25s.retrieve() does NOT raise here - it silently returns an
+        # all-zero-score, arbitrary-order top-k that looks like a genuine
+        # BM25 hit list downstream. Short-circuit instead of letting that
+        # noise enter RRF fusion as if it were a real sparse signal.
+        logger = get_logger(trace_id=trace_id)
+        logger.warning("bm25_empty_query_tokens", stage="bm25_query", query=query)
+        return []
+
     results, scores = retriever.retrieve(query_tokens, k=min(top_n, len(chunk_ids)))
     return [
         {"chunk_id": chunk_ids[idx], "score": float(score)}
