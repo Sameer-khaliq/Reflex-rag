@@ -1,17 +1,16 @@
-"""
-Local cross-encoder reranking (FR-2) — runs entirely on CPU, no API call.
-"""
 from __future__ import annotations
 
 import asyncio
 import time
 from typing import Any
 
-import torch
-from sentence_transformers import CrossEncoder
-
 from config import get_config
 from logging_config import get_logger
+from sentence_transformers import CrossEncoder
+import torch
+
+# CPU core usage cap at module load
+torch.set_num_threads(min(4, torch.get_num_threads()))
 
 _reranker: CrossEncoder | None = None
 
@@ -21,10 +20,9 @@ def _get_reranker() -> CrossEncoder:
     if _reranker is not None:
         return _reranker
 
-    torch.set_num_threads(min(4, torch.get_num_threads()))
     model_name = get_config().retrieval.rerank.model
 
-    # Updated max_length to 512 tokens to prevent context boundary cutoff
+    # Pehle local cache check karo, agar na mile to download fallback
     try:
         _reranker = CrossEncoder(
             model_name,
@@ -52,14 +50,20 @@ def preload_reranker() -> None:
     model = _get_reranker()
     try:
         with torch.inference_mode():
-            model.predict([("warmup query", "warmup text")], show_progress_bar=False)
+            model.predict(
+                [("warmup query", "warmup text")], show_progress_bar=False
+            )
     except Exception as e:  # noqa: BLE001
         logger.debug("reranker_warmup_failed", error=str(e))
 
 
 def _candidate_text(candidate: dict[str, Any]) -> str:
     payload = candidate.get("payload") or {}
-    text = payload.get("text") or candidate.get("text") or candidate.get("content", "")
+    text = (
+        payload.get("text")
+        or candidate.get("text")
+        or candidate.get("content", "")
+    )
     max_chars = get_config().retrieval.rerank.max_candidate_chars
     return str(text)[:max_chars]
 
@@ -98,7 +102,10 @@ def rerank(
     elapsed_ms = (time.perf_counter() - start) * 1000
 
     scored = [
-        {**candidate, "rerank_score": float(score)}
+        {
+            **candidate,
+            "rerank_score": float(score[0] if hasattr(score, "__len__") else score),
+        }
         for candidate, score in zip(pool, scores)
     ]
     scored.sort(key=lambda c: c["rerank_score"], reverse=True)
@@ -126,11 +133,42 @@ async def rerank_async(
             asyncio.to_thread(rerank, query, candidates, top_k, trace_id),
             timeout=get_config().retrieval.rerank.timeout_s,
         )
-    except TimeoutError:
+    except (TimeoutError, asyncio.TimeoutError):
         logger = get_logger(trace_id=trace_id)
         logger.warning(
             "rerank_timeout_fallback",
             stage="rerank",
-            detail="Exceeded timeout cap, skipping rerank",
+            detail="Exceeded timeout cap, skipping rerank and keeping RRF order",
         )
         return candidates[:top_k] if top_k is not None else candidates
+
+def main():
+    query = "What is Retrieval-Augmented Generation?"
+
+    # Candidates jo fusion.py se aaye
+    candidates = [
+        {
+            "chunk_id": 1,
+            "text": "API Rate Limits: Requests are capped at 500 per minute with X-RateLimit headers.",
+            "rrf_score": 0.032,
+        },
+        {
+            "chunk_id": 2,
+            "text": "Retrieval-Augmented Generation (RAG) merges semantic search with large language models.",
+            "rrf_score": 0.016,
+        },
+    ]
+
+    print("Running synchronous rerank...")
+    results = rerank(query, candidates, top_k=2)
+
+    for item in results:
+        print(
+            f"Chunk ID: {item['chunk_id']} | Rerank Score: {item['rerank_score']:.4f}"
+        )
+        print(f"Text: {item['text']}")
+        print("-" * 30)
+
+
+if __name__ == "__main__":
+    main()
