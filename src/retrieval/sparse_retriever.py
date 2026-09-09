@@ -98,3 +98,45 @@ def query_bm25(query: str, top_n: int | None = None, trace_id: str = "bm25_query
         {"chunk_id": chunk_ids[idx], "score": float(score)}
         for idx, score in zip(results[0], scores[0])
     ]
+
+def main():
+    # 1. Dummy sample chunks simulate karein (jo ingestion se aate hain)
+    sample_chunks = [
+        {
+            "chunk_id": 101,
+            "text": "Retrieval-Augmented Generation (RAG) optimizes LLMs by pulling external context.",
+        },
+        {
+            "chunk_id": 102,
+            "text": "API rate limits allow a maximum of 500 requests per minute with status headers.",
+        },
+        {
+            "chunk_id": 103,
+            "text": "Failed payments enter a dunning cycle before customer account suspension.",
+        },
+        {
+            "chunk_id": 104,
+            "text": "BM25 is a bag-of-words retrieval algorithm based on term frequency and inverse document frequency.",
+        },
+    ]
+
+    print("Building and caching BM25 index...")
+    get_or_build_index(chunks=sample_chunks, rebuild=True, trace_id="test_build")
+
+    # 2. Exact keyword query test
+    query = "What is BM25 term frequency?"
+    print(f"\n--- Testing Query: '{query}' ---")
+    hits = query_bm25(query=query, top_n=2, trace_id="test_query_1")
+
+    for hit in hits:
+        print(f"Matched Chunk ID: {hit['chunk_id']} | BM25 Score: {hit['score']:.4f}")
+
+    
+    stopwords_query = "is the and of"
+    print(f"\n--- Testing Stopwords-only Query: '{stopwords_query}' ---")
+    empty_hits = query_bm25(query=stopwords_query, top_n=2, trace_id="test_query_2")
+    print(f"Results returned (Expected empty): {empty_hits}")
+
+
+if __name__ == "__main__":
+    main()
