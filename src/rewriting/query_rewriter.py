@@ -1,30 +1,6 @@
-"""
-Query rewriting (FR-6).
-
-Given an under-specified or insufficiently-retrieved query and the full
-rewrite_history so far, produces a genuinely different, more specific
-reformulation via the tier2_rewriting model. Two independent retry
-conditions, each with its own reprompt:
-
-  1. Malformed JSON output -> reprompt with the schema restated.
-  2. A rewrite that exactly repeats a prior entry in rewrite_history ->
-     reprompt explicitly told to avoid the repeated phrasing. This is
-     what FR-6's "doesn't repeat a prior failed reformulation" actually
-     means in practice — a rewrite that's byte-for-byte identical to one
-     that already failed to retrieve enough clearly isn't a genuine
-     reformulation.
-
-If 3 attempts are exhausted without a valid, non-duplicate rewrite, this
-raises RewriteGenerationFailed rather than silently returning something.
-REQUIREMENTS.md's error taxonomy defines a fail-closed default for a bad
-chunk grade (AMBIGUOUS) but there's no equivalent safe default for a
-rewrite — a fabricated "safe" rewrite could just as easily send the loop
-in a worse direction than the original query. The orchestration node
-(Phase 7) should catch this and route to terminal low_confidence rather
-than ever handing generation a rewrite this module wasn't confident in.
-"""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 
@@ -46,27 +22,18 @@ _SYSTEM_PROMPT = (
     "original query and a list of prior rewrites that also failed, "
     "produce ONE new reformulation that is genuinely different from "
     "every prior rewrite — more specific, using different phrasing or "
-    "disambiguating terms, not a near-paraphrase. Respond with ONLY a "
-    'JSON object matching this exact schema, no other text: '
-    '{"rewritten_query": "<the new query>"}'
     "disambiguating terms, not a near-paraphrase.\n"
     "Respond with ONLY a valid JSON object matching this schema, no markdown, no thinking tags:\n"
     '{"rewritten_query": "your actual rewritten query text here"}'
 )
 
 _MALFORMED_REPROMPT_SUFFIX = (
-    "\n\nYour previous response did not match the required JSON schema. "
-    "Do NOT include thinking or analysis. "
-    "Respond with ONLY valid JSON matching exactly this schema, no "
-    'markdown, no code fences: {"rewritten_query": "<the new query>"}'
-    "\n\nYour previous response was malformed. Respond with ONLY valid JSON containing your actual search query, "
-    'matching: {"rewritten_query": "your rewritten query text here"}'
+    "\n\nYour previous response was malformed or did not match JSON. "
+    "Do NOT include thinking, markdown, or code fences. "
+    'Respond with ONLY valid JSON: {"rewritten_query": "your rewritten query text here"}'
 )
 
 _DUPLICATE_REPROMPT_SUFFIX = (
-    "\n\nYour previous rewrite exactly repeated an entry already in the "
-    "rewrite history. Produce a reformulation that is meaningfully "
-    "different in wording and approach from every entry already listed."
     "\n\nYour previous rewrite repeated an entry in the history or used a placeholder. "
     "Produce a genuine search query with specific terms different from past attempts."
 )
@@ -74,7 +41,9 @@ _DUPLICATE_REPROMPT_SUFFIX = (
 
 def _build_user_prompt(original_query: str, rewrite_history: list[str]) -> str:
     history_block = (
-        "\n".join(f"- {r}" for r in rewrite_history) if rewrite_history else "(none yet)"
+        "\n".join(f"- {r}" for r in rewrite_history)
+        if rewrite_history
+        else "(none yet)"
     )
     return (
         f"Original query: {original_query}\n\n"
@@ -85,22 +54,32 @@ def _build_user_prompt(original_query: str, rewrite_history: list[str]) -> str:
 def _is_duplicate(candidate: str, rewrite_history: list[str]) -> bool:
     normalized_candidate = candidate.strip().lower()
     placeholders = {
-        "<the new query>", "the new query", "<the rewritten query>",
-        "<new query>", "<query>", "the rewritten query", "your actual rewritten query text here",
-        "your rewritten query text here", ""
+        "<the new query>",
+        "the new query",
+        "<the rewritten query>",
+        "<new query>",
+        "<query>",
+        "the rewritten query",
+        "your actual rewritten query text here",
+        "your rewritten query text here",
+        "",
     }
     if normalized_candidate in placeholders:
         return True
-    return any(normalized_candidate == r.strip().lower() for r in rewrite_history)
+    return any(
+        normalized_candidate == r.strip().lower() for r in rewrite_history
+    )
 
 
 def _clean_response(raw: str) -> str:
-    """Removes <think>...</think> tags and markdown code blocks."""
-    # Strip thinking blocks (e.g. Qwen / DeepSeek)
+    """Removes thinking blocks (<think>...</think>) and markdown code fences."""
     text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-    # Strip markdown fences
     if text.startswith("```"):
-        lines = [line for line in text.split("\n") if not line.strip().startswith("```")]
+        lines = [
+            line
+            for line in text.split("\n")
+            if not line.strip().startswith("```")
+        ]
         text = "\n".join(lines).strip()
     return text
 
@@ -112,8 +91,9 @@ def _try_parse(raw_response: str) -> str | None:
         parsed = RewriteOutput(rewritten_query=payload["rewritten_query"])
         return parsed.rewritten_query
     except Exception:
-        # Secondary fallback: regex to extract JSON object if surrounding text exists
-        match = re.search(r'\{.*"rewritten_query"\s*:\s*".*?".*\}', raw_response, re.DOTALL)
+        match = re.search(
+            r'\{.*"rewritten_query"\s*:\s*".*?".*\}', raw_response, re.DOTALL
+        )
         if match:
             try:
                 payload = json.loads(match.group(0))
@@ -135,7 +115,6 @@ async def rewrite_query(
 
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            # max_tokens cap added to keep response under Groq's 1000 OTPM ceiling
             raw_response = await call_with_failover(
                 slug_pair,
                 system_prompt,
@@ -144,7 +123,6 @@ async def rewrite_query(
                 max_tokens=250,
             )
         except TypeError:
-            # If call_with_failover signature doesn't take kwargs yet, fall back without max_tokens
             raw_response = await call_with_failover(
                 slug_pair, system_prompt, user_prompt, trace_id=trace_id
             )
@@ -185,3 +163,32 @@ async def rewrite_query(
         f"Failed to produce a valid, non-duplicate rewrite for {original_query!r} "
         f"after {_MAX_ATTEMPTS} attempts."
     )
+
+
+async def main():
+    print("--- Running Query Rewriter Verification ---\n")
+
+    test_query = "limits"
+    # Pehle fail hone wale attempts simulate karte hain
+    mock_history = [
+        "what are the rate limits",
+        "api request limits",
+    ]
+
+    print(f"Original Query : '{test_query}'")
+    print(f"Prior Failures : {mock_history}\n")
+
+    try:
+        new_query = await rewrite_query(
+            original_query=test_query,
+            rewrite_history=mock_history,
+            trace_id="test_rewriter",
+        )
+        print("Success!")
+        print(f"Rewritten Query: '{new_query}'")
+    except Exception as e:
+        print(f"Failed with error: {e}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
