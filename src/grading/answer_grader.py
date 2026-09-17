@@ -76,7 +76,7 @@ async def grade_answer(
     original_query: str,
     trace_id: str = "answer_grade",
 ) -> AnswerGrade:
-    """FR-10 + FR-11. Grades `answer` for groundedness against `context`
+    """ Grades `answer` for groundedness against `context`
     and relevance against `original_query` in a single LLM call.
 
     Fail-closed on malformed output: one retry with a stricter reprompt,
