@@ -1,41 +1,3 @@
-"""
-CRAG-style per-chunk document grading (FR-4).
-
-Each reranked chunk is graded CORRECT / AMBIGUOUS / INCORRECT relative
-to the query by the tier1_grading model (config.model_tiers.tier1_grading,
-Groq primary / OpenRouter fallback per llm_clients.router).
-
-Deliberately does NOT trust the LLM to echo back the chunk_id correctly
-— chunk_id is already known before the call, so only "grade" is parsed
-from the response and validated against ChunkGrade's Literal constraint.
-This sidesteps a whole failure class (LLM mistypes/truncates an ID) that
-has nothing to do with whether the grade itself is trustworthy.
-
-Two independent failure classes both fail closed to AMBIGUOUS, never to
-CORRECT, per IMPLEMENTATION_PLAN.md §3: "A broken grader should never
-silently pass bad content through as if it were verified."
-
-  1. Malformed output: response isn't valid JSON matching ChunkGrade's
-     schema. Gets one stricter reprompt; still malformed -> AMBIGUOUS.
-  2. Call failure: both providers (Groq primary, OpenRouter fallback)
-     exhaust their retries — llm_clients.router.call_with_failover only
-     wraps the primary attempt in try/except, so a fallback exhaustion
-     propagates as an uncaught RetriesExhaustedError (or any other
-     transient exception) to the caller. This is treated as a per-chunk
-     grading failure, not a system-wide infra failure like a Qdrant
-     outage (IMPLEMENTATION_PLAN.md §3 reserves hard-failure/5xx
-     propagation for that class specifically) — one chunk having a bad
-     moment on both providers shouldn't crash grading for every other
-     chunk in the same retrieval-grading pass, especially since chunks
-     are graded concurrently via grade_chunks(). Caught here and failed
-     closed the same way malformed output is.
-
-grade_chunks() also passes return_exceptions=True to asyncio.gather as a
-second line of defense — if grade_chunk() itself were ever changed to
-raise again in the future, one bad chunk still can't take down the whole
-batch; any escaped exception is converted to an AMBIGUOUS grade for that
-chunk_id rather than propagating.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -68,16 +30,19 @@ _MALFORMED_REPROMPT_SUFFIX = (
 
 
 def _extract_chunk_id(chunk: dict, index: int) -> str:
-    """Safely extracts chunk_id from corpus chunks ('chunk_id') or
-    fallback/Tavily chunks ('id', 'url'), falling back to a deterministic index."""
+    """Extracts chunk_id or fallback identifiers, defaulting to deterministic index."""
     val = chunk.get("chunk_id") or chunk.get("id") or chunk.get("url")
     return str(val) if val is not None else f"fallback_chunk_{index}"
 
 
 def _extract_chunk_text(chunk: dict) -> str:
-    """Safely extracts text content from corpus chunks ('text') or
-    fallback/Tavily chunks ('content', 'snippet')."""
-    return str(chunk.get("text") or chunk.get("content") or chunk.get("snippet") or "")
+    """Extracts raw text content across internal corpus or external web fallback formats."""
+    return str(
+        chunk.get("text")
+        or chunk.get("content")
+        or chunk.get("snippet")
+        or ""
+    )
 
 
 def _build_user_prompt(query: str, chunk_text: str) -> str:
@@ -85,17 +50,13 @@ def _build_user_prompt(query: str, chunk_text: str) -> str:
 
 
 def _strip_fences(raw: str) -> str:
-    """Strips ```json ... ``` / ``` ... ``` wrapping. LLMs frequently add
-    this even when explicitly instructed not to — without stripping it,
-    a perfectly valid grade gets misclassified as malformed output and
-    silently degrades grading accuracy (confirmed: a CORRECT grade wrapped
-    in fences fails both the initial parse and the reprompt-retry parse,
-    landing on AMBIGUOUS despite the model having graded correctly both
-    times)."""
+    """Strips Markdown code fences to prevent JSON parse failures."""
     text = raw.strip()
     if text.startswith("```"):
         lines = [
-            line for line in text.split("\n") if not line.strip().startswith("```")
+            line
+            for line in text.split("\n")
+            if not line.strip().startswith("```")
         ]
         text = "\n".join(lines).strip()
     return text
@@ -109,10 +70,7 @@ async def _call_or_none(
     logger,
     chunk_id: str,
 ) -> str | None:
-    """Wraps call_with_failover so a total provider exhaustion (or any
-    other transient exception escaping the router) is treated as a failed
-    grading attempt rather than an unhandled crash — same fail-closed
-    class as malformed output, per this module's docstring."""
+    """Executes LLM call, returning None on transient/provider failures."""
     try:
         return await call_with_failover(
             slug_pair, system_prompt, user_prompt, trace_id=trace_id
@@ -127,16 +85,26 @@ async def _call_or_none(
         return None
 
 
+def _try_parse(raw_response: str, chunk_id: str) -> ChunkGrade | None:
+    try:
+        payload = json.loads(_strip_fences(raw_response))
+        return ChunkGrade(chunk_id=chunk_id, grade=payload["grade"])
+    except (json.JSONDecodeError, KeyError, TypeError, ValidationError):
+        return None
+
+
 async def grade_chunk(
     query: str,
     chunk_id: str,
     chunk_text: str,
     trace_id: str = "grade_chunk",
 ) -> ChunkGrade:
+    """Evaluates a single chunk against the query with reprompt retry and fail-closed logic."""
     logger = get_logger(trace_id=trace_id)
     slug_pair = get_config().model_tiers.tier1_grading
     user_prompt = _build_user_prompt(query, chunk_text)
 
+    # 1. Primary Attempt
     raw_response = await _call_or_none(
         slug_pair, _SYSTEM_PROMPT, user_prompt, trace_id, logger, chunk_id
     )
@@ -151,6 +119,7 @@ async def grade_chunk(
             raw_response=raw_response[:200],
         )
 
+    # 2. Stricter Reprompt Retry
     retry_response = await _call_or_none(
         slug_pair,
         _SYSTEM_PROMPT + _MALFORMED_REPROMPT_SUFFIX,
@@ -164,6 +133,7 @@ async def grade_chunk(
         if grade is not None:
             return grade
 
+    # 3. Fail closed to AMBIGUOUS
     logger.warning(
         "chunk_grade_fail_closed",
         stage="document_grading",
@@ -174,29 +144,12 @@ async def grade_chunk(
     return ChunkGrade(chunk_id=chunk_id, grade="AMBIGUOUS")
 
 
-def _try_parse(raw_response: str, chunk_id: str) -> ChunkGrade | None:
-    try:
-        payload = json.loads(_strip_fences(raw_response))
-        return ChunkGrade(chunk_id=chunk_id, grade=payload["grade"])
-    except (json.JSONDecodeError, KeyError, TypeError, ValidationError):
-        return None
-
-
 async def grade_chunks(
     query: str,
     chunks: list[dict],
     trace_id: str = "grade_chunks",
 ) -> list[ChunkGrade]:
-    """Grades every chunk concurrently. Accepts both internal corpus chunks
-    ('chunk_id' / 'text') and external fallback chunks ('id' / 'url' / 'content').
-
-    return_exceptions=True is deliberate defense-in-depth: grade_chunk()
-    already catches its own call failures internally and never raises,
-    but this ensures that if it ever did (a future bug, an exception
-    type not covered by the broad `except Exception` above), one bad
-    chunk still fails closed to AMBIGUOUS for its own chunk_id instead of
-    crashing the whole batch and losing every other chunk's valid grade.
-    """
+    """Grades multiple chunks concurrently using a semaphore to avoid rate limits."""
     logger = get_logger(trace_id=trace_id)
 
     normalized_chunks = [
@@ -232,3 +185,50 @@ async def grade_chunks(
         else:
             graded.append(result)
     return graded
+
+
+# Verification & Testing Main Function
+async def main():
+    test_query = "What are the rate limit headers returned by the API?"
+
+    # 3 Distinct chunks: 1 Correct, 1 Ambiguous/Borderline, 1 Incorrect
+    mock_chunks = [
+        {
+            "chunk_id": "chunk_api_headers_01",
+            "text": (
+                "Document: API Rate Limits > Section: Headers\n"
+                "Every API response includes three headers indicating current status: "
+                "X-RateLimit-Limit, X-RateLimit-Remaining, and X-RateLimit-Reset."
+            ),
+        },
+        {
+            "chunk_id": "chunk_billing_02",
+            "text": (
+                "Document: Billing Overview > Section: Plan Tiers\n"
+                "The Starter tier includes up to 500 requests per month. "
+                "Any additional requests incur overage charges."
+            ),
+        },
+        {
+            "chunk_id": "chunk_failed_payments_03",
+            "text": (
+                "Document: Payments > Section: Dunning\n"
+                "Once a valid payment method successfully clears the outstanding balance, "
+                "account access is restored automatically within minutes."
+            ),
+        },
+    ]
+
+    print(f"Testing Document Grading for query: '{test_query}'\n")
+    graded_results = await grade_chunks(
+        test_query, mock_chunks, trace_id="grader_test"
+    )
+
+    for item in graded_results:
+        print(f"Chunk ID : {item.chunk_id}")
+        print(f"Grade    : {item.grade}")
+        print("-" * 35)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
